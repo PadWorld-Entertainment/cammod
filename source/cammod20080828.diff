@@ -1,0 +1,251 @@
+
+Eigenschafts„nderungen: code\game
+___________________________________________________________________
+Name: svn:ignore
+   + game.bat
+
+
+
+Eigenschafts„nderungen: code\cgame
+___________________________________________________________________
+Name: svn:ignore
+   + cgame.q3asm
+
+
+Index: code/cgame/cg_local.h
+===================================================================
+--- code/cgame/cg_local.h	(Revision 97)
++++ code/cgame/cg_local.h	(Arbeitskopie)
+@@ -710,7 +710,11 @@
+ 	refEntity_t		testModelEntity;
+ 	char			testModelName[MAX_QPATH];
+ 	qboolean		testGun;
+-
++	
++	// cammod
++	vec3_t			demoCamPos;
++	vec3_t			demoCamAngles;
++	qboolean		demoCam;
+ } cg_t;
+ 
+ 
+@@ -1346,6 +1350,8 @@
+ extern	vmCvar_t		cg_drawLPSwallhack;
+ extern	vmCvar_t		cg_LPSwallhackSize;
+ extern	vmCvar_t		cg_LPSwallhackAlpha;
++extern	vmCvar_t		cg_hideChat;
++extern	vmCvar_t		cg_lookAtPlayer;
+ //extern	vmCvar_t		cg_speedyTrail;
+ 
+ //
+Index: code/cgame/cg_weapons.c
+===================================================================
+--- code/cgame/cg_weapons.c	(Revision 97)
++++ code/cgame/cg_weapons.c	(Arbeitskopie)
+@@ -1495,6 +1495,9 @@
+ 	if ( ps->pm_type == PM_INTERMISSION ) {
+ 		return;
+ 	}
++	
++	if( cg.demoCam)
++		return;	
+ 
+ 	// no gun if in third person view or a camera is active
+ 	//if ( cg.renderingThirdPerson || cg.cameraMode) {
+Index: code/cgame/cg_draw.c
+===================================================================
+--- code/cgame/cg_draw.c	(Revision 97)
++++ code/cgame/cg_draw.c	(Arbeitskopie)
+@@ -2204,6 +2204,7 @@
+ 	name = cgs.clientinfo[ cg.crosshairClientNum ].name;
+ 	w = CG_DrawStrlen( name ) * BIGCHAR_WIDTH;
+ 	CG_DrawBigString( 320 - w / 2, 170, name, color[3] * 0.5f );
++	CG_DrawBigString( 330 + w / 2, 170, va("%d",cg.crosshairClientNum), color[3] * 0.5f ); 
+ 	trap_R_SetColor( NULL );
+ }
+ 
+@@ -2557,6 +2558,9 @@
+ 	if ( cg.levelShot ) {
+ 		return;
+ 	}
++	
++	if( cg.demoCam)
++		return;
+ 
+ 	if ( cg_draw2D.integer == 0 ) {
+ 		return;
+@@ -3274,7 +3278,7 @@
+ 	}
+ 
+ 	ltiT = cgs.clientinfo[cg.snap->ps.clientNum].lastTeleInTime;
+-	if(!cg.renderingThirdPerson && !(cg.snap->ps.eFlags & EF_DEAD) && ltiT && cg.time-ltiT<500)
++	if(!cg.renderingThirdPerson && !cg.demoCam && !(cg.snap->ps.eFlags & EF_DEAD) && ltiT && cg.time-ltiT<500)
+ 	{
+ 		vec4_t tmpcolor = {1,1,1,1};
+ 		int team = cg.snap->ps.persistant[PERS_TEAM];
+@@ -3292,7 +3296,7 @@
+ 		trap_R_SetColor(NULL);
+ 	}
+ 
+-	if(!cg.renderingThirdPerson && cg.snap->ps.powerups[PW_BERSERKER])
++	if(!cg.renderingThirdPerson && !cg.demoCam && cg.snap->ps.powerups[PW_BERSERKER])
+ 	{
+ 		trap_R_DrawStretchPic(cg.refdef.x,cg.refdef.y,cg.refdef.width,cg.refdef.height,0,0,1,1,cgs.media.BerserkerScreenShader);
+ 	}
+Index: code/cgame/cg_consolecmds.c
+===================================================================
+--- code/cgame/cg_consolecmds.c	(Revision 97)
++++ code/cgame/cg_consolecmds.c	(Arbeitskopie)
+@@ -225,6 +225,40 @@
+ 		Com_Printf("available help:\n");
+ 		Com_Printf(" g_gametype\n");
+ 	}
++}
++
++static void CT_DemoCam( void ) {
++	cg.demoCam = cg.demoCam ? 0 : 1;
++	VectorCopy(cg.refdef.vieworg,cg.demoCamPos);
++	VectorCopy(cg.refdefViewAngles,cg.demoCamAngles);
++}
++
++void Cmd_SetFreecamPos_f( void ) {
++	vec3_t	origin, angles;
++	char	buffer[MAX_TOKEN_CHARS];
++	int		i;
++
++	if ( trap_Argc() < 3 ) {
++		CG_Printf("usage: setviewpos x y z pitch yaw roll\n");
++		return;
++	}
++
++	VectorClear( angles );
++
++	for ( i = 0 ; i < 3 ; i++ ) {
++		trap_Argv( i + 1, buffer, sizeof( buffer ) );
++		origin[i] = atof( buffer );
++	}
++
++	trap_Argv( 5, buffer, sizeof( buffer ) );
++	angles[YAW] = atof( buffer );
++	trap_Argv( 4, buffer, sizeof( buffer ) );
++	angles[PITCH] = atof( buffer );
++	trap_Argv( 6, buffer, sizeof( buffer ) );
++	angles[ROLL] = atof( buffer );
++
++	VectorCopy( origin, cg.demoCamPos );
++	VectorCopy( angles, cg.demoCamAngles );
+ }
+ 
+ static void CG_DropCartridge_f(void) {
+@@ -264,6 +298,8 @@
+ 	{ "loaddeferred", CG_LoadDeferredPlayers }	
+ 
+ 	,{"rechooselogo", CG_ReChooseLogo_f }
++	,{"freecamsetpos", Cmd_SetFreecamPos_f}
++	,{"freecam", CT_DemoCam}
+ 
+ 	,{"help", CG_HelpCmd_f }
+ 	,{"dropCartridge",CG_DropCartridge_f}
+Index: code/cgame/cg_view.c
+===================================================================
+--- code/cgame/cg_view.c	(Revision 97)
++++ code/cgame/cg_view.c	(Arbeitskopie)
+@@ -652,7 +652,20 @@
+ */
+ }
+ 
++qboolean FindTarget(vec3_t target){
++	int targetId = cg_lookAtPlayer.integer;
++	
++	if( targetId < 0 || targetId >= cgs.maxclients )
++		return qfalse;
+ 
++	if( !cgs.clientinfo[ targetId ].infoValid ){
++		return qfalse;
++	}
++	
++	VectorCopy( cg_entities[ targetId ].lerpOrigin, target );
++	return qtrue;
++}
++
+ /*
+ ===============
+ CG_CalcViewValues
+@@ -687,6 +700,32 @@
+ 		}
+ 	}
+ */
++	if (cg.demoCam) {
++		float fov = cg_fov.value;
++		float x;
++		vec3_t target;
++
++		VectorCopy(cg.demoCamPos, cg.refdef.vieworg );
++		if( FindTarget(target) ){
++			vec3_t dir, angles;
++			VectorSubtract( target, cg.refdef.vieworg, dir);
++			vectoangles( dir, angles);			
++			VectorCopy( angles, cg.refdefViewAngles);
++		}
++		else{
++			VectorCopy(cg.demoCamAngles,cg.refdefViewAngles);
++		}
++
++		AnglesToAxis( cg.refdefViewAngles, cg.refdef.viewaxis );
++
++		x = cg.refdef.width / tan( fov / 360 * M_PI );
++		cg.refdef.fov_y = atan2( cg.refdef.height, x );
++		cg.refdef.fov_y = cg.refdef.fov_y * 360 / M_PI;
++		cg.refdef.fov_x = fov;
++
++		return 0;
++	}
++	
+ 	// intermission view
+ 	if ( ps->pm_type == PM_INTERMISSION ) {
+ 		VectorCopy( ps->origin, cg.refdef.vieworg );
+Index: code/cgame/cg_servercmds.c
+===================================================================
+--- code/cgame/cg_servercmds.c	(Revision 97)
++++ code/cgame/cg_servercmds.c	(Arbeitskopie)
+@@ -511,7 +511,7 @@
+ 	}
+ 
+ 	if ( !strcmp( cmd, "chat" ) ) {
+-		if ( !cg_teamChatsOnly.integer ) {
++		if ( !cg_hideChat.integer && !cg_teamChatsOnly.integer ) {
+ 			trap_S_StartLocalSound( cgs.media.talkSound, CHAN_LOCAL_SOUND );
+ 			Q_strncpyz( text, CG_Argv(1), MAX_SAY_TEXT );
+ 			CG_RemoveChatEscapeChar( text );
+@@ -553,6 +553,9 @@
+ 	}
+ 
+ 	if ( !strcmp( cmd, "tchat" ) ) {
++		if ( cg_hideChat.integer )
++			return;
++			
+ 		trap_S_StartLocalSound( cgs.media.talkSound, CHAN_LOCAL_SOUND );
+ 		Q_strncpyz( text, CG_Argv(1), MAX_SAY_TEXT );
+ 		CG_RemoveChatEscapeChar( text );
+Index: code/cgame/cg_main.c
+===================================================================
+--- code/cgame/cg_main.c	(Revision 97)
++++ code/cgame/cg_main.c	(Arbeitskopie)
+@@ -166,6 +166,8 @@
+ vmCvar_t	cg_drawLPSwallhack;
+ vmCvar_t	cg_LPSwallhackSize;
+ vmCvar_t	cg_LPSwallhackAlpha;
++vmCvar_t	cg_hideChat;
++vmCvar_t	cg_lookAtPlayer;
+ //vmCvar_t	cg_speedyTrail;
+ 
+ typedef struct {
+@@ -283,6 +285,8 @@
+ 	,{ &cg_drawLPSwallhack, "cg_drawLPSwallhack", "1", CVAR_ARCHIVE }
+ 	,{ &cg_LPSwallhackSize, "cg_LPSwallhackSize", "1.0", CVAR_ARCHIVE }
+ 	,{ &cg_LPSwallhackAlpha, "cg_LPSwallhackAlpha", "1.0", CVAR_ARCHIVE }
++	,{ &cg_hideChat, "cg_hideChat", "0", CVAR_ARCHIVE }
++	,{ &cg_lookAtPlayer, "cg_lookAtPlayer", "-1", CVAR_ARCHIVE }
+ 
+ //	,{ &cg_speedyTrail, "cg_speedyTrail", "2", CVAR_ARCHIVE }
+ };
